@@ -8,7 +8,7 @@ name: Deploy Content to intelsworkspace [caf04dc2-3512-4f1a-acff-9f79773ce080]
 #    - '.github/workflows/sentinel-deploy-caf04dc2-3512-4f1a-acff-9f79773ce080.yml'
 #   2. Append the path to the directory environment variable below
 #       directory: '${{ github.workspace }}/SentinelContent'
-
+FORCE_JAVASCRIPT_ACTIONS_TO_NODE20=true
 on: 
   push:
     branches: [ master ]
