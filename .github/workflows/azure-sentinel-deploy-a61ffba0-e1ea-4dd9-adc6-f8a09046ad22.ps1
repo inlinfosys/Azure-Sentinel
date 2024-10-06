@@ -117,9 +117,10 @@ function GetGithubTree {
 #Creates a table using the reponse from the tree api, creates a table 
 function GetCommitShaTable($getTreeResponse) {
     $shaTable = @{}
+    $supportedExtensions = @(".json", ".bicep", ".bicepparam");
     $getTreeResponse.tree | ForEach-Object {
         $truePath = AbsolutePathWithSlash $_.path
-        if (([System.IO.Path]::GetExtension($_.path) -eq ".json") -or ($truePath -eq $configPath))
+        if ((([System.IO.Path]::GetExtension($_.path) -in $supportedExtensions)) -or ($truePath -eq $configPath))
         {
             $shaTable.Add($truePath, $_.sha)
         }
@@ -284,13 +285,22 @@ function ToContentKind($contentKinds, $resource, $templateObject) {
     return $null
 }
 
-function IsValidTemplate($path, $templateObject) {
+function IsValidTemplate($path, $templateObject, $parameterFile) {
     Try {
         if (DoesContainWorkspaceParam $templateObject) {
-            Test-AzResourceGroupDeployment -ResourceGroupName $ResourceGroupName -TemplateFile $path -workspace $WorkspaceName
+            if ($parameterFile) {
+                Test-AzResourceGroupDeployment -ResourceGroupName $ResourceGroupName -TemplateFile $path -TemplateParameterFile $parameterFile -workspace $WorkspaceName
+            }
+            else {
+                Test-AzResourceGroupDeployment -ResourceGroupName $ResourceGroupName -TemplateFile $path -workspace $WorkspaceName
+            }
         }
         else {
-            Test-AzResourceGroupDeployment -ResourceGroupName $ResourceGroupName -TemplateFile $path
+            if ($parameterFile) {
+                Test-AzResourceGroupDeployment -ResourceGroupName $ResourceGroupName -TemplateFile $path -TemplateParameterFile $parameterFile
+            } else {
+                Test-AzResourceGroupDeployment -ResourceGroupName $ResourceGroupName -TemplateFile $path
+            }
         }
 
         return $true
@@ -333,7 +343,7 @@ function DoesContainWorkspaceParam($templateObject) {
 function AttemptDeployment($path, $parameterFile, $deploymentName, $templateObject) {
     Write-Host "[Info] Deploying $path with deployment name $deploymentName"
 
-    $isValid = IsValidTemplate $path $templateObject
+    $isValid = IsValidTemplate $path $templateObject $parameterFile
     if (-not $isValid) {
         return $false
     }
@@ -435,7 +445,7 @@ function LoadDeploymentConfig() {
 
 function filterContentFile($fullPath) {
 	$temp = RelativePathWithBackslash $fullPath
-	return $global:excludeContentFiles | ? {$temp.StartsWith($_, 'CurrentCultureIgnoreCase')}
+	return $global:excludeContentFiles | Where-Object {$temp.StartsWith($_, 'CurrentCultureIgnoreCase')}
 }
 
 function RelativePathWithBackslash($absolutePath) {
@@ -449,7 +459,7 @@ function AbsolutePathWithSlash($relativePath) {
 #resolve parameter file name, return $null if there is none.
 function GetParameterFile($path) {
     $index = RelativePathWithBackslash $path
-    $key = ($global:parameterFileMapping.Keys | ? { $_ -eq $index })
+    $key = ($global:parameterFileMapping.Keys | Where-Object { $_ -eq $index })
     if ($key) {
         $mappedParameterFile = AbsolutePathWithSlash $global:parameterFileMapping[$key]
         if (Test-Path $mappedParameterFile) {
@@ -457,18 +467,30 @@ function GetParameterFile($path) {
         }
     }
 
-    $parameterFilePrefix = $path.TrimEnd(".json")
-    
-    $workspaceParameterFile = $parameterFilePrefix + ".parameters-$WorkspaceId.json"
-    if (Test-Path $workspaceParameterFile) {
-        return $workspaceParameterFile
+    $extension = [System.IO.Path]::GetExtension($path)
+    $parameterFilePrefix = if ($extension -eq ".json") {
+        $extension = ".parameters.json"
+        $path.TrimEnd(".json")
+    } elseif ($extension -eq ".bicep") {
+        $extension = ".bicepparam"
+        $path.TrimEnd(".bicep")
+    } else {
+        return $null
     }
     
-    $defaultParameterFile = $parameterFilePrefix + ".parameters.json"
+    # Check for workspace-specific parameter file
+    if ($extension -eq ".parameters.json") {
+        $workspaceParameterFile = $parameterFilePrefix + ".parameters-$WorkspaceId" + $extension
+        if (Test-Path $workspaceParameterFile) {
+            return $workspaceParameterFile
+        }
+    }
+
+    $defaultParameterFile = $parameterFilePrefix + $extension
     if (Test-Path $defaultParameterFile) {
         return $defaultParameterFile
     }
-    
+
     return $null
 }
 
@@ -480,7 +502,7 @@ function Deployment($fullDeploymentFlag, $remoteShaTable, $tree) {
         $totalFailed = 0;
 	      $iterationList = @()
         $global:prioritizedContentFiles | ForEach-Object  { $iterationList += (AbsolutePathWithSlash $_) }
-        Get-ChildItem -Path $Directory -Recurse -Filter *.json -exclude *metadata.json, *.parameters*.json |
+        Get-ChildItem -Path $Directory -Recurse -Include *.bicep, *.json -exclude *metadata.json, *.parameters*.json, *.bicepparam, bicepconfig.json |
                         Where-Object { $null -eq ( filterContentFile $_.FullName ) } |
                         Select-Object -Property FullName |
                         ForEach-Object { $iterationList += $_.FullName }
@@ -491,7 +513,13 @@ function Deployment($fullDeploymentFlag, $remoteShaTable, $tree) {
                 Write-Host "[Warning] Skipping deployment for $path. The file doesn't exist."
                 return
             }
-            $templateObject = Get-Content $path | Out-String | ConvertFrom-Json
+            
+            if ($path -like "*.bicep") {
+                $templateObject = bicep build $path --stdout | Out-String | ConvertFrom-Json
+            } else {
+                $templateObject = Get-Content $path | Out-String | ConvertFrom-Json
+            }
+
             if (-not (IsValidResourceType $templateObject))
             {
                 Write-Host "[Warning] Skipping deployment for $path. The file contains resources for content that was not selected for deployment. Please add content type to connection if you want this file to be deployed."
