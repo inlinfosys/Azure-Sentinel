@@ -27,12 +27,14 @@ jobs:
       directory: '${{ github.workspace }}'
       cloudEnv: 'AzureCloud'
       creds: ${{ secrets.AZURE_SENTINEL_CREDENTIALS_a61ffba0e1ea4dd9adc6f8a09046ad22 }}
-      contentTypes: 'AnalyticsRule,AutomationRule,HuntingQuery,Parser,Playbook,Workbook'
+      contentTypes: 'AnalyticsRule,AutomationRule,HuntingQuery,Playbook,Workbook'
       branch: 'master'
       sourceControlId: 'a61ffba0-e1ea-4dd9-adc6-f8a09046ad22'
       rootDirectory: '${{ github.workspace }}'
       githubAuthToken: ${{ secrets.GITHUB_TOKEN }}
       smartDeployment: 'true'
+    permissions:
+      contents: write
 
     steps:
     - name: Login to Azure (Attempt 1)
@@ -73,7 +75,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v3
     
-    - name: Deploy Content to Azure Sentinel
+    - name: Deploy Content to Microsoft Sentinel
       uses: azure/powershell@v1
       with:
         azPSVersion: 'latest'
